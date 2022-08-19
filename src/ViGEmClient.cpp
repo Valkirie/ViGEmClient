@@ -48,6 +48,7 @@ SOFTWARE.
 #include <algorithm>
 #include <thread>
 #include <functional>
+#include <string>
 
 //
 // Internal
