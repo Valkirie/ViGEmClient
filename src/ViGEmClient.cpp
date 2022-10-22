@@ -31,6 +31,7 @@ SOFTWARE.
 #include <initguid.h>
 #include <Dbghelp.h>
 #include <devpkey.h>
+#include <strsafe.h>
 
 //
 // Driver shared
@@ -44,8 +45,6 @@ SOFTWARE.
 // 
 #include <cstdlib>
 #include <climits>
-#include <vector>
-#include <algorithm>
 #include <thread>
 #include <functional>
 #include <string>
@@ -54,6 +53,67 @@ SOFTWARE.
 // Internal
 // 
 #include "Internal.h"
+
+//#define VIGEM_VERBOSE_LOGGING_ENABLED
+
+
+#pragma region Diagnostics
+
+#ifdef _DEBUG
+#define DBGPRINT(kwszDebugFormatString, ...) _DBGPRINT(__FUNCTIONW__, __LINE__, kwszDebugFormatString, __VA_ARGS__)
+#else
+#define DBGPRINT( kwszDebugFormatString, ... ) ;;
+#endif
+
+VOID _DBGPRINT(LPCWSTR kwszFunction, INT iLineNumber, LPCWSTR kwszDebugFormatString, ...)
+{
+	INT cbFormatString = 0;
+	va_list args;
+	PWCHAR wszDebugString = nullptr;
+	size_t st_Offset = 0;
+
+	va_start(args, kwszDebugFormatString);
+
+	cbFormatString = _scwprintf(L"[%s:%d] ", kwszFunction, iLineNumber) * sizeof(WCHAR);
+	cbFormatString += _vscwprintf(kwszDebugFormatString, args) * sizeof(WCHAR) + 2;
+
+	/* Depending on the size of the format string, allocate space on the stack or the heap. */
+	wszDebugString = static_cast<PWCHAR>((0));
+
+	/* Populate the buffer with the contents of the format string. */
+	StringCbPrintfW(wszDebugString, cbFormatString, L"[%s:%d] ", kwszFunction, iLineNumber);
+	StringCbLengthW(wszDebugString, cbFormatString, &st_Offset);
+	StringCbVPrintfW(&wszDebugString[st_Offset / sizeof(WCHAR)], cbFormatString - st_Offset, kwszDebugFormatString,
+		args);
+
+	OutputDebugStringW(wszDebugString);
+
+	_freea(wszDebugString);
+	va_end(args);
+}
+
+static void to_hex(unsigned char* in, size_t insz, char* out, size_t outsz)
+{
+	unsigned char* pin = in;
+	auto hex = "0123456789ABCDEF";
+	char* pout = out;
+	for (; pin < in + insz; pout += 3, pin++)
+	{
+		pout[0] = hex[(*pin >> 4) & 0xF];
+		pout[1] = hex[*pin & 0xF];
+		pout[2] = ':';
+		if (pout + 3 - out > outsz)
+		{
+			/* Better to truncate output string than overflow buffer */
+			/* it would be still better to either return a status */
+			/* or ensure the target buffer is large enough and it never happen */
+			break;
+		}
+	}
+	pout[-1] = 0;
+}
+
+#pragma endregion
 
 
 //
@@ -241,6 +301,64 @@ PVIGEM_TARGET FORCEINLINE VIGEM_TARGET_ALLOC_INIT(
 	return target;
 }
 
+static DWORD WINAPI vigem_internal_ds4_output_report_pickup_handler(LPVOID Parameter)
+{
+	const auto pClient = static_cast<PVIGEM_CLIENT>(Parameter);
+	DS4_AWAIT_OUTPUT await;
+	DEVICE_IO_CONTROL_BEGIN;
+
+	DBGPRINT(L"Started DS4 Output Report pickup thread for 0x%p", pClient);
+
+	do
+	{
+		DS4_AWAIT_OUTPUT_INIT(&await, 0);
+
+		DeviceIoControl(
+			pClient->hBusDevice,
+			IOCTL_DS4_AWAIT_OUTPUT_AVAILABLE,
+			&await,
+			await.Size,
+			&await,
+			await.Size,
+			&transferred,
+			&lOverlapped
+		);
+
+		if (GetOverlappedResult(pClient->hBusDevice, &lOverlapped, &transferred, TRUE) == 0)
+		{
+			const DWORD error = GetLastError();
+
+			DBGPRINT(L"Win32 Error: 0x%X", error);
+		}
+
+#if defined(VIGEM_VERBOSE_LOGGING_ENABLED)
+		DBGPRINT(L"Dumping buffer for %d", await.SerialNo);
+
+		const PCHAR dumpBuffer = (PCHAR)calloc(sizeof(DS4_OUTPUT_BUFFER), 3);
+		to_hex(await.Report.Buffer, sizeof(DS4_OUTPUT_BUFFER), dumpBuffer, sizeof(DS4_OUTPUT_BUFFER) * 3);
+		OutputDebugStringA(dumpBuffer);
+#endif
+
+		const PVIGEM_TARGET pTarget = pClient->pTargetsList[await.SerialNo];
+
+		if (pTarget)
+		{
+			memcpy(&pTarget->Ds4CachedOutputReport, &await.Report, sizeof(DS4_OUTPUT_BUFFER));
+			SetEvent(pTarget->Ds4CachedOutputReportUpdateAvailable);
+		}
+		else
+		{
+			DBGPRINT(L"No target to report to for serial %d", await.SerialNo);
+		}
+	} while (WaitForSingleObjectEx(pClient->hDS4OutputReportPickupThreadAbortEvent, 0, FALSE) == WAIT_TIMEOUT);
+
+	DEVICE_IO_CONTROL_END;
+
+	DBGPRINT(L"Finished DS4 Output Report pickup thread for 0x%p", pClient);
+
+	return 0;
+}
+
 PVIGEM_CLIENT vigem_alloc()
 {
 	const auto driver = static_cast<PVIGEM_CLIENT>(malloc(sizeof(VIGEM_CLIENT)));
@@ -250,6 +368,7 @@ PVIGEM_CLIENT vigem_alloc()
 
 	RtlZeroMemory(driver, sizeof(VIGEM_CLIENT));
 	driver->hBusDevice = INVALID_HANDLE_VALUE;
+	driver->hDS4OutputReportPickupThreadAbortEvent = CreateEvent(nullptr, TRUE, FALSE, nullptr);
 
 	return driver;
 }
@@ -378,7 +497,6 @@ VIGEM_ERROR vigem_connect(PVIGEM_CLIENT vigem)
 			nullptr
 		))
 		{
-			SetupDiDestroyDeviceInfoList(deviceInfoSet);
 			free(detailDataBuffer);
 			error = VIGEM_ERROR_BUS_NOT_FOUND;
 			continue;
@@ -425,6 +543,15 @@ VIGEM_ERROR vigem_connect(PVIGEM_CLIENT vigem)
 		// wait for result
 		if (GetOverlappedResult(vigem->hBusDevice, &lOverlapped, &transferred, TRUE) != 0)
 		{
+			vigem->hDS4OutputReportPickupThread = CreateThread(
+				nullptr,
+				0,
+				vigem_internal_ds4_output_report_pickup_handler,
+				vigem,
+				0,
+				nullptr
+			);
+
 			error = VIGEM_ERROR_NONE;
 			free(detailDataBuffer);
 			CloseHandle(lOverlapped.hEvent);
@@ -447,13 +574,34 @@ void vigem_disconnect(PVIGEM_CLIENT vigem)
 	if (!vigem)
 		return;
 
+	if (vigem->hDS4OutputReportPickupThread && vigem->hDS4OutputReportPickupThreadAbortEvent)
+	{
+		DBGPRINT(L"Awaiting DS4 thread clean-up for 0x%p", vigem);
+
+		SetEvent(vigem->hDS4OutputReportPickupThreadAbortEvent);
+
+		if (vigem->hBusDevice != INVALID_HANDLE_VALUE)
+		{
+			DBGPRINT(L"Cancelling all I/O for 0x%p", vigem);
+			CancelIoEx(vigem->hBusDevice, nullptr);
+		}
+
+		WaitForSingleObject(vigem->hDS4OutputReportPickupThread, INFINITE);
+		CloseHandle(vigem->hDS4OutputReportPickupThread);
+		CloseHandle(vigem->hDS4OutputReportPickupThreadAbortEvent);
+
+		DBGPRINT(L"DS4 thread clean-up for 0x%p finished", vigem);
+	}
+
 	if (vigem->hBusDevice != INVALID_HANDLE_VALUE)
 	{
-		CloseHandle(vigem->hBusDevice);
+		DBGPRINT(L"Closing bus handle for 0x%p", vigem);
 
-		RtlZeroMemory(vigem, sizeof(VIGEM_CLIENT));
+		CloseHandle(vigem->hBusDevice);
 		vigem->hBusDevice = INVALID_HANDLE_VALUE;
 	}
+
+	RtlZeroMemory(vigem, sizeof(VIGEM_CLIENT));
 }
 
 BOOLEAN vigem_target_is_waitable_add_supported(PVIGEM_TARGET target)
@@ -491,6 +639,7 @@ PVIGEM_TARGET vigem_target_ds4_alloc(void)
 
 	target->VendorId = 0x054C;
 	target->ProductId = 0x05C4;
+	target->Ds4CachedOutputReportUpdateAvailable = CreateEvent(nullptr, FALSE, FALSE, nullptr);
 
 	return target;
 }
@@ -512,7 +661,8 @@ VIGEM_ERROR vigem_target_add(PVIGEM_CLIENT vigem, PVIGEM_TARGET target)
 	OVERLAPPED olWait = { 0 };
 	olWait.hEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
 
-	do {
+	do
+	{
 		if (!vigem)
 		{
 			error = VIGEM_ERROR_BUS_INVALID_HANDLE;
@@ -633,6 +783,11 @@ VIGEM_ERROR vigem_target_add(PVIGEM_CLIENT vigem, PVIGEM_TARGET target)
 		}
 	} while (false);
 
+	if (VIGEM_SUCCESS(error))
+	{
+		vigem->pTargetsList[target->SerialNo] = target;
+	}
+
 	if (olPlugIn.hEvent)
 		CloseHandle(olPlugIn.hEvent);
 
@@ -712,6 +867,13 @@ VIGEM_ERROR vigem_target_remove(PVIGEM_CLIENT vigem, PVIGEM_TARGET target)
 
 	if (GetOverlappedResult(vigem->hBusDevice, &lOverlapped, &transferred, TRUE) != 0)
 	{
+		if (target->Ds4CachedOutputReportUpdateAvailable)
+		{
+			CloseHandle(target->Ds4CachedOutputReportUpdateAvailable);
+		}
+
+		vigem->pTargetsList[target->SerialNo] = nullptr;
+
 		target->State = VIGEM_TARGET_DISCONNECTED;
 		DEVICE_IO_CONTROL_END;
 
@@ -899,7 +1061,7 @@ VIGEM_ERROR vigem_target_ds4_register_notification(
 	target->Notification = reinterpret_cast<FARPROC>(notification);
 	target->NotificationUserData = userData;
 
-	if (target->CancelNotificationThreadEvent == 0)
+	if (target->CancelNotificationThreadEvent == nullptr)
 		target->CancelNotificationThreadEvent = CreateEvent(
 			nullptr,
 			TRUE,
@@ -1025,7 +1187,7 @@ VIGEM_ERROR vigem_target_ds4_register_notification(
 
 void vigem_target_x360_unregister_notification(PVIGEM_TARGET target)
 {
-	if (target->CancelNotificationThreadEvent != 0)
+	if (target->CancelNotificationThreadEvent != nullptr)
 		SetEvent(target->CancelNotificationThreadEvent);
 
 	if (target->CancelNotificationThreadEvent != nullptr)
@@ -1163,7 +1325,11 @@ VIGEM_ERROR vigem_target_ds4_update(
 	return VIGEM_ERROR_NONE;
 }
 
-VIGEM_ERROR vigem_target_ds4_update_ex(PVIGEM_CLIENT vigem, PVIGEM_TARGET target, DS4_REPORT_EX report)
+VIGEM_ERROR vigem_target_ds4_update_ex(
+	PVIGEM_CLIENT vigem,
+	PVIGEM_TARGET target,
+	DS4_REPORT_EX report
+)
 {
 	if (!vigem)
 		return VIGEM_ERROR_BUS_INVALID_HANDLE;
@@ -1304,74 +1470,7 @@ VIGEM_ERROR vigem_target_ds4_await_output_report(
 	PDS4_OUTPUT_BUFFER buffer
 )
 {
-	if (!vigem)
-		return VIGEM_ERROR_BUS_INVALID_HANDLE;
-
-	if (!target)
-		return VIGEM_ERROR_INVALID_TARGET;
-
-	if (vigem->hBusDevice == INVALID_HANDLE_VALUE)
-		return VIGEM_ERROR_BUS_NOT_FOUND;
-
-	if (target->SerialNo == 0)
-		return VIGEM_ERROR_INVALID_TARGET;
-
-	if (!buffer)
-		return VIGEM_ERROR_INVALID_PARAMETER;
-
-	DEVICE_IO_CONTROL_BEGIN;
-
-	DS4_AWAIT_OUTPUT await;
-
-retry:
-	DS4_AWAIT_OUTPUT_INIT(&await, target->SerialNo);
-
-	DeviceIoControl(
-		vigem->hBusDevice,
-		IOCTL_DS4_AWAIT_OUTPUT_AVAILABLE,
-		&await,
-		await.Size,
-		&await,
-		await.Size,
-		&transferred,
-		&lOverlapped
-	);
-
-	if (GetOverlappedResult(vigem->hBusDevice, &lOverlapped, &transferred, TRUE) == 0)
-	{
-		const DWORD error = GetLastError();
-		DEVICE_IO_CONTROL_END;
-
-		if (error == ERROR_ACCESS_DENIED)
-		{
-			return VIGEM_ERROR_INVALID_TARGET;
-		}
-
-		/*
-		 * NOTE: check if the driver has set the same serial number we submitted
-		 * to be sure this report belongs to our target device. One queue is used
-		 * for all potentially spawned virtual DS4s due to limitations on how
-		 * DMF_NotifyUserWithRequestMultiple works in combination with device 
-		 * objects. The module keeps track on requests issued via the FDO (bus
-		 * driver device) but must notify for one to many virtual DS4 PDOs.
-		 * Therefore, it may happen that a packet bubbles up that doesn't belong
-		 * to our device of interest. The workaround is to check if the serial
-		 * remained the same and if not, fetch the next packet until the queue
-		 * has been processed in its entirety. 
-		 */
-		if (error == ERROR_SUCCESS && await.SerialNo != target->SerialNo)
-		{
-			goto retry;
-		}
-
-		return VIGEM_ERROR_WINAPI;
-	}
-
-	RtlCopyMemory(buffer, await.Report.Buffer, sizeof(DS4_OUTPUT_BUFFER));
-
-	DEVICE_IO_CONTROL_END;
-
-	return VIGEM_ERROR_NONE;
+	return vigem_target_ds4_await_output_report_timeout(vigem, target, INFINITE, buffer);
 }
 
 VIGEM_ERROR vigem_target_ds4_await_output_report_timeout(
@@ -1396,64 +1495,22 @@ VIGEM_ERROR vigem_target_ds4_await_output_report_timeout(
 	if (!buffer)
 		return VIGEM_ERROR_INVALID_PARAMETER;
 
-	DEVICE_IO_CONTROL_BEGIN;
+	const DWORD status = WaitForSingleObject(target->Ds4CachedOutputReportUpdateAvailable, milliseconds);
 
-	DS4_AWAIT_OUTPUT await;
-
-retry:
-	DS4_AWAIT_OUTPUT_INIT(&await, target->SerialNo);
-
-	DeviceIoControl(
-		vigem->hBusDevice,
-		IOCTL_DS4_AWAIT_OUTPUT_AVAILABLE,
-		&await,
-		await.Size,
-		&await,
-		await.Size,
-		&transferred,
-		&lOverlapped
-	);
-
-	if (GetOverlappedResultEx(vigem->hBusDevice, &lOverlapped, &transferred, milliseconds, FALSE) == 0)
+	if (status == WAIT_TIMEOUT)
 	{
-		const DWORD error = GetLastError();
-		DEVICE_IO_CONTROL_END;
+		return VIGEM_ERROR_TIMED_OUT;
+}
 
-		switch (error)
-		{
-		case ERROR_ACCESS_DENIED:
-			return VIGEM_ERROR_INVALID_TARGET;
-		case ERROR_IO_INCOMPLETE:
-		case WAIT_TIMEOUT:
-			CancelIoEx(vigem->hBusDevice, &lOverlapped);
-			return VIGEM_ERROR_TIMED_OUT;
-		default:
-			break;
-		}
+#if defined(VIGEM_VERBOSE_LOGGING_ENABLED)
+	DBGPRINT(L"Dumping buffer for %d", target->SerialNo);
 
-		/*
-		 * NOTE: check if the driver has set the same serial number we submitted
-		 * to be sure this report belongs to our target device. One queue is used
-		 * for all potentially spawned virtual DS4s due to limitations on how
-		 * DMF_NotifyUserWithRequestMultiple works in combination with device 
-		 * objects. The module keeps track on requests issued via the FDO (bus
-		 * driver device) but must notify for one to many virtual DS4 PDOs.
-		 * Therefore, it may happen that a packet bubbles up that doesn't belong
-		 * to our device of interest. The workaround is to check if the serial
-		 * remained the same and if not, fetch the next packet until the queue
-		 * has been processed in its entirety. 
-		 */
-		if (error == ERROR_SUCCESS && await.SerialNo != target->SerialNo)
-		{
-			goto retry;
-		}
+	const PCHAR dumpBuffer = (PCHAR)calloc(sizeof(DS4_OUTPUT_BUFFER), 3);
+	to_hex(target->Ds4CachedOutputReport.Buffer, sizeof(DS4_OUTPUT_BUFFER), dumpBuffer, sizeof(DS4_OUTPUT_BUFFER) * 3);
+	OutputDebugStringA(dumpBuffer);
+#endif
 
-		return VIGEM_ERROR_WINAPI;
-	}
-
-	RtlCopyMemory(buffer, await.Report.Buffer, sizeof(DS4_OUTPUT_BUFFER));
-
-	DEVICE_IO_CONTROL_END;
+	RtlCopyMemory(buffer, &target->Ds4CachedOutputReport, sizeof(DS4_OUTPUT_BUFFER));
 
 	return VIGEM_ERROR_NONE;
 }
