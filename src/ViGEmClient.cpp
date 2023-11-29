@@ -121,7 +121,6 @@ static void to_hex(unsigned char* in, size_t insz, char* out, size_t outsz)
 
 #pragma endregion
 
-
 //
 // Uncomment to compile in crash dump handler
 // 
@@ -665,6 +664,7 @@ void vigem_target_free(PVIGEM_TARGET target)
 		free(target);
 }
 
+#define WAIT_DEVICE_READY_TRIES 4
 VIGEM_ERROR vigem_target_add(PVIGEM_CLIENT vigem, PVIGEM_TARGET target)
 {
 	VIGEM_ERROR error = VIGEM_ERROR_NO_FREE_SLOT;
@@ -747,51 +747,82 @@ VIGEM_ERROR vigem_target_add(PVIGEM_CLIENT vigem, PVIGEM_TARGET target)
 			// 
 			if (GetOverlappedResult(vigem->hBusDevice, &olPlugIn, &transferred, TRUE) != 0)
 			{
-				/*
-				 * This function is announced to be blocking/synchronous, a concept that
-				 * doesn't reflect the way the bus driver/PNP manager bring child devices
-				 * to life. Therefore, we send another IOCTL which will be kept pending
-				 * until the bus driver has been notified that the child device has
-				 * reached a state that is deemed operational. This request is only
-				 * supported on drivers v1.17 or higher, so gracefully cause errors
-				 * of this call as a potential success and keep the device plugged in.
-				 */
-				VIGEM_WAIT_DEVICE_READY_INIT(&devReady, plugin.SerialNo);
-
-				DeviceIoControl(
-					vigem->hBusDevice,
-					IOCTL_VIGEM_WAIT_DEVICE_READY,
-					&devReady,
-					devReady.Size,
-					nullptr,
-					0,
-					&transferred,
-					&olWait
-				);
-
-				if (GetOverlappedResult(vigem->hBusDevice, &olWait, &transferred, TRUE) != 0)
+				bool waitSuccess = false;
+				for (int i = 0; i < WAIT_DEVICE_READY_TRIES && !waitSuccess; i++)
 				{
-					target->State = VIGEM_TARGET_CONNECTED;
+					/*
+					* This function is announced to be blocking/synchronous, a concept that
+					* doesn't reflect the way the bus driver/PNP manager bring child devices
+					* to life. Therefore, we send another IOCTL which will be kept pending
+					* until the bus driver has been notified that the child device has
+					* reached a state that is deemed operational. This request is only
+					* supported on drivers v1.17 or higher, so gracefully cause errors
+					* of this call as a potential success and keep the device plugged in.
+					*/
+					VIGEM_WAIT_DEVICE_READY_INIT(&devReady, plugin.SerialNo);
 
-					error = VIGEM_ERROR_NONE;
-					break;
+					DeviceIoControl(
+						vigem->hBusDevice,
+						IOCTL_VIGEM_WAIT_DEVICE_READY,
+						&devReady,
+						devReady.Size,
+						nullptr,
+						0,
+						&transferred,
+						&olWait
+					);
+
+					bool lastRun = i == WAIT_DEVICE_READY_TRIES-1;
+					if (GetOverlappedResult(vigem->hBusDevice, &olWait, &transferred, TRUE) != 0)
+					{
+						target->State = VIGEM_TARGET_CONNECTED;
+
+						error = VIGEM_ERROR_NONE;
+						waitSuccess = true;
+						break;
+					}
+
+					DWORD lastError = GetLastError();
+					//
+					// Backwards compatibility with version pre-1.17, where this IOCTL doesn't exist
+					//
+					if (lastError == ERROR_INVALID_PARAMETER)
+					{
+						target->State = VIGEM_TARGET_CONNECTED;
+						target->IsWaitReadyUnsupported = true;
+
+						error = VIGEM_ERROR_NONE;
+						waitSuccess = true;
+						break;
+					}
+					else if (lastError != ERROR_DEVICE_HARDWARE_ERROR)
+					{
+						// Plugin failure occurred. Ignore ERROR_DEVICE_HARDWARE_ERROR as that
+						// indicates a timeout looking for an XUSB LED packet. Try again
+						// for that case.
+						break;
+					}
+
+					if (!lastRun)
+					{
+						HANDLE waitEvent = olWait.hEvent;
+						memset(&olWait, 0, sizeof(olWait));
+						if (waitEvent)
+						{
+							ResetEvent(waitEvent);
+							olWait.hEvent = waitEvent;
+						}
+					}
 				}
 
-				//
-				// Backwards compatibility with version pre-1.17, where this IOCTL doesn't exist
-				// 
-				if (GetLastError() == ERROR_INVALID_PARAMETER)
+				if (waitSuccess)
 				{
-					target->State = VIGEM_TARGET_CONNECTED;
-					target->IsWaitReadyUnsupported = true;
-
-					error = VIGEM_ERROR_NONE;
 					break;
 				}
 
 				//
 				// Don't leave device connected if the wait call failed
-				// 
+				//
 				error = vigem_target_remove(vigem, target);
 				break;
 			}
