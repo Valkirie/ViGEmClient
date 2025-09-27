@@ -665,6 +665,11 @@ void vigem_target_free(PVIGEM_TARGET target)
 }
 
 #define WAIT_DEVICE_READY_TRIES 4
+#define WAIT_DEVICE_READY_DELAY_MS 1000
+
+#define REMOVE_DEVICE_TRIES 4
+#define REMOVE_DEVICE_RETRY_DELAY_MS 1000
+
 VIGEM_ERROR vigem_target_add(PVIGEM_CLIENT vigem, PVIGEM_TARGET target)
 {
 	VIGEM_ERROR error = VIGEM_ERROR_NO_FREE_SLOT;
@@ -805,6 +810,8 @@ VIGEM_ERROR vigem_target_add(PVIGEM_CLIENT vigem, PVIGEM_TARGET target)
 
 					if (!lastRun)
 					{
+						Sleep(WAIT_DEVICE_READY_DELAY_MS);
+
 						HANDLE waitEvent = olWait.hEvent;
 						memset(&olWait, 0, sizeof(olWait));
 						if (waitEvent)
@@ -896,39 +903,84 @@ VIGEM_ERROR vigem_target_remove(PVIGEM_CLIENT vigem, PVIGEM_TARGET target)
 		return VIGEM_ERROR_TARGET_NOT_PLUGGED_IN;
 
 	VIGEM_UNPLUG_TARGET unplug;
-	DEVICE_IO_CONTROL_BEGIN;
-
 	VIGEM_UNPLUG_TARGET_INIT(&unplug, target->SerialNo);
 
-	DeviceIoControl(
-		vigem->hBusDevice,
-		IOCTL_VIGEM_UNPLUG_TARGET,
-		&unplug,
-		unplug.Size,
-		nullptr,
-		0,
-		&transferred,
-		&lOverlapped
-	);
+	VIGEM_ERROR result = VIGEM_ERROR_REMOVAL_FAILED;
 
-	if (GetOverlappedResult(vigem->hBusDevice, &lOverlapped, &transferred, TRUE) != 0)
+	// We re-create OVERLAPPED per try to avoid stale signaled events between attempts
+	for (int attempt = 0; attempt < REMOVE_DEVICE_TRIES; ++attempt)
 	{
-		if (target->Ds4CachedOutputReportUpdateAvailable)
+		DEVICE_IO_CONTROL_BEGIN;
+
+		DeviceIoControl(
+			vigem->hBusDevice,
+			IOCTL_VIGEM_UNPLUG_TARGET,
+			&unplug,
+			unplug.Size,
+			nullptr,
+			0,
+			&transferred,
+			&lOverlapped
+		);
+
+		if (GetOverlappedResult(vigem->hBusDevice, &lOverlapped, &transferred, TRUE) != 0)
 		{
-			CloseHandle(target->Ds4CachedOutputReportUpdateAvailable);
+			// Success path: clean up and mark disconnected
+			if (target->Ds4CachedOutputReportUpdateAvailable)
+			{
+				CloseHandle(target->Ds4CachedOutputReportUpdateAvailable);
+				target->Ds4CachedOutputReportUpdateAvailable = nullptr;
+			}
+
+			vigem->pTargetsList[target->SerialNo] = nullptr;
+			target->State = VIGEM_TARGET_DISCONNECTED;
+
+			DEVICE_IO_CONTROL_END;
+			return VIGEM_ERROR_NONE;
 		}
 
-		vigem->pTargetsList[target->SerialNo] = nullptr;
+		// Failure: decide whether to retry or bail out
+		const DWORD err = GetLastError();
 
-		target->State = VIGEM_TARGET_DISCONNECTED;
+		// Treat these as transient or "already gone" conditions; retry or accept as success where appropriate
+		if (err == ERROR_DEVICE_NOT_CONNECTED)
+		{
+			// If the device is already considered gone by the bus, mark as removed locally
+			if (target->Ds4CachedOutputReportUpdateAvailable)
+			{
+				CloseHandle(target->Ds4CachedOutputReportUpdateAvailable);
+				target->Ds4CachedOutputReportUpdateAvailable = nullptr;
+			}
+			vigem->pTargetsList[target->SerialNo] = nullptr;
+			target->State = VIGEM_TARGET_DISCONNECTED;
+
+			DEVICE_IO_CONTROL_END;
+			return VIGEM_ERROR_NONE;
+		}
+
+		// Access denied/operation aborted can happen during teardown/cancel; retry a couple of times
+		if ((err == ERROR_ACCESS_DENIED) || (err == ERROR_OPERATION_ABORTED) || (err == ERROR_RETRY))
+		{
+			DEVICE_IO_CONTROL_END;
+
+			if (attempt < (REMOVE_DEVICE_TRIES - 1))
+			{
+				Sleep(REMOVE_DEVICE_RETRY_DELAY_MS);
+				continue; // try again
+			}
+			else
+			{
+				// Out of tries
+				break;
+			}
+		}
+
+		// Any other error: break and return failure
 		DEVICE_IO_CONTROL_END;
-
-		return VIGEM_ERROR_NONE;
+		break;
 	}
 
-	DEVICE_IO_CONTROL_END;
-
-	return VIGEM_ERROR_REMOVAL_FAILED;
+	return result;
 }
 
 // Num of items in Notification DeviceIOControl queue (at any time there should be at least one extra call waiting for the new events or there is danger that notification events are lost).
