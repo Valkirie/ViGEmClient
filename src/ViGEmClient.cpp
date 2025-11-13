@@ -279,7 +279,7 @@ struct Version
 
     bool Empty()
     {
-        bool result = major = 0 && minor == 0 && revision == 0 && build == 0;
+        bool result = major == 0 && minor == 0 && revision == 0 && build == 0;
         return result;
     }
 
