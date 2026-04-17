@@ -128,15 +128,15 @@ static void to_hex(unsigned char* in, size_t insz, char* out, size_t outsz)
 
 
 #ifdef VIGEM_USE_CRASH_HANDLER
-typedef BOOL(WINAPI *MINIDUMPWRITEDUMP)(
-    HANDLE hProcess,
-    DWORD dwPid,
-    HANDLE hFile,
-    MINIDUMP_TYPE DumpType,
-    CONST PMINIDUMP_EXCEPTION_INFORMATION ExceptionParam,
-    CONST PMINIDUMP_USER_STREAM_INFORMATION UserStreamParam,
-    CONST PMINIDUMP_CALLBACK_INFORMATION CallbackParam
-    );
+typedef BOOL(WINAPI* MINIDUMPWRITEDUMP)(
+	HANDLE hProcess,
+	DWORD dwPid,
+	HANDLE hFile,
+	MINIDUMP_TYPE DumpType,
+	CONST PMINIDUMP_EXCEPTION_INFORMATION ExceptionParam,
+	CONST PMINIDUMP_USER_STREAM_INFORMATION UserStreamParam,
+	CONST PMINIDUMP_CALLBACK_INFORMATION CallbackParam
+	);
 
 LONG WINAPI vigem_internal_exception_handler(struct _EXCEPTION_POINTERS* apExceptionInfo);
 #endif
@@ -148,142 +148,142 @@ LONG WINAPI vigem_internal_exception_handler(struct _EXCEPTION_POINTERS* apExcep
 class NotificationRequestPayload
 {
 public:
-    LPVOID lpPayloadBuffer;
-    DWORD  payloadBufferSize;
-    DWORD  ioControlCode;
+	LPVOID lpPayloadBuffer;
+	DWORD  payloadBufferSize;
+	DWORD  ioControlCode;
 
 public:
-    NotificationRequestPayload(DWORD _bufferSize, DWORD _ioControlCode)
-    {
-        lpPayloadBuffer = malloc(_bufferSize);
-        payloadBufferSize = _bufferSize;
-        ioControlCode = _ioControlCode;
-    }
+	NotificationRequestPayload(DWORD _bufferSize, DWORD _ioControlCode)
+	{
+		lpPayloadBuffer = malloc(_bufferSize);
+		payloadBufferSize = _bufferSize;
+		ioControlCode = _ioControlCode;
+	}
 
-    virtual ~NotificationRequestPayload()
-    {
-        free(lpPayloadBuffer);
-    }
+	virtual ~NotificationRequestPayload()
+	{
+		free(lpPayloadBuffer);
+	}
 
-    virtual void ProcessNotificationRequest(PVIGEM_CLIENT client, PVIGEM_TARGET target) = 0;
+	virtual void ProcessNotificationRequest(PVIGEM_CLIENT client, PVIGEM_TARGET target) = 0;
 };
 
 class NotificationRequestPayloadX360 : public NotificationRequestPayload
 {
 public:
-    NotificationRequestPayloadX360(ULONG _serialNo) : NotificationRequestPayload(sizeof(XUSB_REQUEST_NOTIFICATION), IOCTL_XUSB_REQUEST_NOTIFICATION)
-    {
-        // Let base class to allocate required buffer size, but initialize it here with a correct type of initialization function
-        XUSB_REQUEST_NOTIFICATION_INIT((PXUSB_REQUEST_NOTIFICATION)lpPayloadBuffer, _serialNo);
-    }
+	NotificationRequestPayloadX360(ULONG _serialNo) : NotificationRequestPayload(sizeof(XUSB_REQUEST_NOTIFICATION), IOCTL_XUSB_REQUEST_NOTIFICATION)
+	{
+		// Let base class to allocate required buffer size, but initialize it here with a correct type of initialization function
+		XUSB_REQUEST_NOTIFICATION_INIT((PXUSB_REQUEST_NOTIFICATION)lpPayloadBuffer, _serialNo);
+	}
 
-    void ProcessNotificationRequest(PVIGEM_CLIENT client, PVIGEM_TARGET target) override
-    {
-        if (target->Notification != nullptr)
-        {
-            PXUSB_REQUEST_NOTIFICATION currentNotify = static_cast<PXUSB_REQUEST_NOTIFICATION>(lpPayloadBuffer);
-            reinterpret_cast<PFN_VIGEM_X360_NOTIFICATION>(target->Notification)(client, target,
-                currentNotify->LargeMotor,
-                currentNotify->SmallMotor,
-                currentNotify->LedNumber,
-                target->NotificationUserData
-                );
-        }
-    }
+	void ProcessNotificationRequest(PVIGEM_CLIENT client, PVIGEM_TARGET target) override
+	{
+		if (target->Notification != nullptr)
+		{
+			PXUSB_REQUEST_NOTIFICATION currentNotify = static_cast<PXUSB_REQUEST_NOTIFICATION>(lpPayloadBuffer);
+			reinterpret_cast<PFN_VIGEM_X360_NOTIFICATION>(target->Notification)(client, target,
+				currentNotify->LargeMotor,
+				currentNotify->SmallMotor,
+				currentNotify->LedNumber,
+				target->NotificationUserData
+				);
+		}
+	}
 };
 
 class NotificationRequestPayloadDS4 : public NotificationRequestPayload
 {
 public:
-    NotificationRequestPayloadDS4(ULONG _serialNo) : NotificationRequestPayload(sizeof(DS4_REQUEST_NOTIFICATION), IOCTL_DS4_REQUEST_NOTIFICATION)
-    {
-        // Let base class to allocate required buffer size, but initialize it here with a correct type of initialization function
-        DS4_REQUEST_NOTIFICATION_INIT((PDS4_REQUEST_NOTIFICATION)lpPayloadBuffer, _serialNo);
-    }
+	NotificationRequestPayloadDS4(ULONG _serialNo) : NotificationRequestPayload(sizeof(DS4_REQUEST_NOTIFICATION), IOCTL_DS4_REQUEST_NOTIFICATION)
+	{
+		// Let base class to allocate required buffer size, but initialize it here with a correct type of initialization function
+		DS4_REQUEST_NOTIFICATION_INIT((PDS4_REQUEST_NOTIFICATION)lpPayloadBuffer, _serialNo);
+	}
 
-    void ProcessNotificationRequest(PVIGEM_CLIENT client, PVIGEM_TARGET target) override
-    {
-        if (target->Notification != nullptr)
-        {
-            PDS4_REQUEST_NOTIFICATION currentNotify = static_cast<PDS4_REQUEST_NOTIFICATION>(lpPayloadBuffer);
-            reinterpret_cast<PFN_VIGEM_DS4_NOTIFICATION>(target->Notification)(client, target,
-                currentNotify->Report.LargeMotor,
-                currentNotify->Report.SmallMotor,
-                currentNotify->Report.LightbarColor,
-                target->NotificationUserData
-                );
-        }
-    }
+	void ProcessNotificationRequest(PVIGEM_CLIENT client, PVIGEM_TARGET target) override
+	{
+		if (target->Notification != nullptr)
+		{
+			PDS4_REQUEST_NOTIFICATION currentNotify = static_cast<PDS4_REQUEST_NOTIFICATION>(lpPayloadBuffer);
+			reinterpret_cast<PFN_VIGEM_DS4_NOTIFICATION>(target->Notification)(client, target,
+				currentNotify->Report.LargeMotor,
+				currentNotify->Report.SmallMotor,
+				currentNotify->Report.LightbarColor,
+				target->NotificationUserData
+				);
+		}
+	}
 };
 
 struct Version
 {
-    Version(std::string versionStr)
-    {
-        sscanf_s(versionStr.c_str(), "%d.%d.%d.%d", &major, &minor, &revision, &build);
-    }
+	Version(std::string versionStr)
+	{
+		sscanf_s(versionStr.c_str(), "%d.%d.%d.%d", &major, &minor, &revision, &build);
+	}
 
-    int CompareTo(const Version& otherVersion)
-    {
-        static int VERSION_EQUAL = 0;
-        static int VERSION_LESSTHAN = -1;
-        static int VERSION_GREATER = 1;
+	int CompareTo(const Version& otherVersion)
+	{
+		static int VERSION_EQUAL = 0;
+		static int VERSION_LESSTHAN = -1;
+		static int VERSION_GREATER = 1;
 
-        int result = VERSION_EQUAL; // Default to equal
-        if (major < otherVersion.major)
-        {
-            result = VERSION_LESSTHAN;
-            return result;
-        }
-        else if (otherVersion.major < major)
-        {
-            result = VERSION_GREATER;
-            return result;
-        }
+		int result = VERSION_EQUAL; // Default to equal
+		if (major < otherVersion.major)
+		{
+			result = VERSION_LESSTHAN;
+			return result;
+		}
+		else if (otherVersion.major < major)
+		{
+			result = VERSION_GREATER;
+			return result;
+		}
 
-        if (minor < otherVersion.minor)
-        {
-            result = VERSION_LESSTHAN;
-            return result;
-        }
-        else if (otherVersion.minor < minor)
-        {
-            result = VERSION_GREATER;
-            return result;
-        }
+		if (minor < otherVersion.minor)
+		{
+			result = VERSION_LESSTHAN;
+			return result;
+		}
+		else if (otherVersion.minor < minor)
+		{
+			result = VERSION_GREATER;
+			return result;
+		}
 
-        if (revision < otherVersion.revision)
-        {
-            result = VERSION_LESSTHAN;
-            return result;
-        }
-        else if (otherVersion.revision < revision)
-        {
-            result = VERSION_GREATER;
-            return result;
-        }
+		if (revision < otherVersion.revision)
+		{
+			result = VERSION_LESSTHAN;
+			return result;
+		}
+		else if (otherVersion.revision < revision)
+		{
+			result = VERSION_GREATER;
+			return result;
+		}
 
-        if (build < otherVersion.build)
-        {
-            result = VERSION_LESSTHAN;
-            return result;
-        }
-        else if (otherVersion.build < build)
-        {
-            result = VERSION_GREATER;
-            return result;
-        }
+		if (build < otherVersion.build)
+		{
+			result = VERSION_LESSTHAN;
+			return result;
+		}
+		else if (otherVersion.build < build)
+		{
+			result = VERSION_GREATER;
+			return result;
+		}
 
-        return result;
-    }
+		return result;
+	}
 
-    bool Empty()
-    {
-        bool result = major == 0 && minor == 0 && revision == 0 && build == 0;
-        return result;
-    }
+	bool Empty()
+	{
+		bool result = major == 0 && minor == 0 && revision == 0 && build == 0;
+		return result;
+	}
 
-    int major = 0, minor = 0, revision = 0, build = 0;
+	int major = 0, minor = 0, revision = 0, build = 0;
 };
 
 //
@@ -332,7 +332,7 @@ static DWORD WINAPI vigem_internal_ds4_output_report_pickup_handler(LPVOID Param
 		if (GetOverlappedResult(pClient->hBusDevice, &lOverlapped, &transferred, TRUE) == 0)
 		{
 			const DWORD error = GetLastError();
-			
+
 			//
 			// Backwards compatibility with version pre-1.19, where this IOCTL doesn't exist
 			// 
@@ -414,100 +414,100 @@ VIGEM_ERROR vigem_connect(PVIGEM_CLIENT vigem)
 		return VIGEM_ERROR_BUS_ALREADY_CONNECTED;
 	}
 
-    Version latestKnown("0.0.0.0");
-    static Version MIN_SUPPORTED_VIGEMBUS = Version("1.16.112.0");
-    long checkDeviceIndex = -1;
-    DWORD currentIndex = 0;
-    DWORD useDeviceIndex = memberIndex;
+	Version latestKnown("0.0.0.0");
+	static Version MIN_SUPPORTED_VIGEMBUS = Version("1.16.112.0");
+	long checkDeviceIndex = -1;
+	DWORD currentIndex = 0;
+	DWORD useDeviceIndex = memberIndex;
 
-    const auto deviceInfoSet = SetupDiGetClassDevs(
-        &GUID_DEVINTERFACE_BUSENUM_VIGEM,
-        nullptr,
-        nullptr,
-        DIGCF_PRESENT | DIGCF_DEVICEINTERFACE
-    );
+	const auto deviceInfoSet = SetupDiGetClassDevs(
+		&GUID_DEVINTERFACE_BUSENUM_VIGEM,
+		nullptr,
+		nullptr,
+		DIGCF_PRESENT | DIGCF_DEVICEINTERFACE
+	);
 
-    SP_DEVINFO_DATA deviceInfoBuffer = { 0 };
-    deviceInfoBuffer.cbSize = sizeof(SP_DEVINFO_DATA);
+	SP_DEVINFO_DATA deviceInfoBuffer = { 0 };
+	deviceInfoBuffer.cbSize = sizeof(SP_DEVINFO_DATA);
 
-    // enumerate device instances
-    while (SetupDiEnumDeviceInfo(
-        deviceInfoSet,
-        memberIndex++,
-        &deviceInfoBuffer
-    ))
-    {
-        DEVPROPTYPE currentPropType;
-        DWORD propRequiredSize = 0;
-        SetupDiGetDeviceProperty(deviceInfoSet,
-            &deviceInfoBuffer,
-            &DEVPKEY_Device_DriverVersion,
-            &currentPropType,
-            nullptr,
-            0,
-            &propRequiredSize,
-            0);
+	// enumerate device instances
+	while (SetupDiEnumDeviceInfo(
+		deviceInfoSet,
+		memberIndex++,
+		&deviceInfoBuffer
+	))
+	{
+		DEVPROPTYPE currentPropType;
+		DWORD propRequiredSize = 0;
+		SetupDiGetDeviceProperty(deviceInfoSet,
+			&deviceInfoBuffer,
+			&DEVPKEY_Device_DriverVersion,
+			&currentPropType,
+			nullptr,
+			0,
+			&propRequiredSize,
+			0);
 
-        if (propRequiredSize > 0)
-        {
-            PWCHAR tempPropBuffer = new WCHAR[propRequiredSize];
+		if (propRequiredSize > 0)
+		{
+			PWCHAR tempPropBuffer = new WCHAR[propRequiredSize];
 			if (!tempPropBuffer) continue;
 
-            SetupDiGetDeviceProperty(deviceInfoSet,
-                &deviceInfoBuffer,
-                &DEVPKEY_Device_DriverVersion,
-                &currentPropType,
-                (BYTE*)tempPropBuffer,
-                propRequiredSize,
-                nullptr,
-                0);
+			SetupDiGetDeviceProperty(deviceInfoSet,
+				&deviceInfoBuffer,
+				&DEVPKEY_Device_DriverVersion,
+				&currentPropType,
+				(BYTE*)tempPropBuffer,
+				propRequiredSize,
+				nullptr,
+				0);
 
-            char* szTo = new char[propRequiredSize];
+			char* szTo = new char[propRequiredSize];
 			if (!szTo)
 			{
 				delete[] tempPropBuffer;
 				continue;
 			}
 
-            WideCharToMultiByte(CP_UTF8, 0, tempPropBuffer, -1, szTo, propRequiredSize, nullptr, nullptr);
-            std::string versionString(szTo);
-            Version tempVersion(versionString);
+			WideCharToMultiByte(CP_UTF8, 0, tempPropBuffer, -1, szTo, propRequiredSize, nullptr, nullptr);
+			std::string versionString(szTo);
+			Version tempVersion(versionString);
 
-            if (latestKnown.CompareTo(tempVersion) < 0)
-            {
-                latestKnown = tempVersion;
-                useDeviceIndex = currentIndex;
-                checkDeviceIndex = useDeviceIndex;
-            }
+			if (latestKnown.CompareTo(tempVersion) < 0)
+			{
+				latestKnown = tempVersion;
+				useDeviceIndex = currentIndex;
+				checkDeviceIndex = useDeviceIndex;
+			}
 
-            delete[] tempPropBuffer;
-            delete[] szTo;
-        }
+			delete[] tempPropBuffer;
+			delete[] szTo;
+		}
 
-        currentIndex++;
-    }
+		currentIndex++;
+	}
 
-    if (checkDeviceIndex == -1 || latestKnown.CompareTo(MIN_SUPPORTED_VIGEMBUS) < 0)
-    {
-        SetupDiDestroyDeviceInfoList(deviceInfoSet);
-        error = VIGEM_ERROR_BUS_VERSION_MISMATCH;
-        return error;
-    }
+	if (checkDeviceIndex == -1 || latestKnown.CompareTo(MIN_SUPPORTED_VIGEMBUS) < 0)
+	{
+		SetupDiDestroyDeviceInfoList(deviceInfoSet);
+		error = VIGEM_ERROR_BUS_VERSION_MISMATCH;
+		return error;
+	}
 
-    // only look at one device instance
-    bool lookupRan = false;
-    while (!lookupRan && SetupDiEnumDeviceInterfaces(
-        deviceInfoSet,
-        nullptr,
-        &GUID_DEVINTERFACE_BUSENUM_VIGEM,
-        useDeviceIndex,
-        &deviceInterfaceData
-    ))
-    {
-        lookupRan = true;
+	// only look at one device instance
+	bool lookupRan = false;
+	while (!lookupRan && SetupDiEnumDeviceInterfaces(
+		deviceInfoSet,
+		nullptr,
+		&GUID_DEVINTERFACE_BUSENUM_VIGEM,
+		useDeviceIndex,
+		&deviceInterfaceData
+	))
+	{
+		lookupRan = true;
 
-        // get required target buffer size
-        SetupDiGetDeviceInterfaceDetail(deviceInfoSet, &deviceInterfaceData, nullptr, 0, &requiredSize, nullptr);
+		// get required target buffer size
+		SetupDiGetDeviceInterfaceDetail(deviceInfoSet, &deviceInterfaceData, nullptr, 0, &requiredSize, nullptr);
 
 		// allocate target buffer
 		const auto detailDataBuffer = static_cast<PSP_DEVICE_INTERFACE_DETAIL_DATA>(malloc(requiredSize));
@@ -817,7 +817,7 @@ VIGEM_ERROR vigem_target_add(PVIGEM_CLIENT vigem, PVIGEM_TARGET target)
 						&olWait
 					);
 
-					bool lastRun = i == WAIT_DEVICE_READY_TRIES-1;
+					bool lastRun = i == WAIT_DEVICE_READY_TRIES - 1;
 					if (GetOverlappedResult(vigem->hBusDevice, &olWait, &transferred, TRUE) != 0)
 					{
 						target->State = VIGEM_TARGET_CONNECTED;
@@ -1063,12 +1063,12 @@ VIGEM_ERROR vigem_target_x360_register_notification(
 	else
 		ResetEvent(target->CancelNotificationThreadEvent);
 
-    std::thread _async{
-        [](
-        PVIGEM_TARGET _Target,
-        PVIGEM_CLIENT _Client,
-        LPVOID _UserData)
-        {
+	std::thread _async{
+		[](
+		PVIGEM_TARGET _Target,
+		PVIGEM_CLIENT _Client,
+		LPVOID _UserData)
+		{
 			DWORD transferred[NOTIFICATION_OVERLAPPED_QUEUE_SIZE] = { };
 			OVERLAPPED lOverlapped[NOTIFICATION_OVERLAPPED_QUEUE_SIZE] = { };
 			std::unique_ptr<NotificationRequestPayloadX360> payloads[NOTIFICATION_OVERLAPPED_QUEUE_SIZE] = { };
@@ -1076,76 +1076,76 @@ VIGEM_ERROR vigem_target_x360_register_notification(
 			memset(transferred, 0, sizeof(transferred));
 			memset(lOverlapped, 0, sizeof(lOverlapped));
 
-            for (int idx = 0; idx < NOTIFICATION_OVERLAPPED_QUEUE_SIZE; idx++)
-                payloads[idx] = std::unique_ptr<NotificationRequestPayloadX360>(new NotificationRequestPayloadX360(_Target->SerialNo));
+			for (int idx = 0; idx < NOTIFICATION_OVERLAPPED_QUEUE_SIZE; idx++)
+				payloads[idx] = std::unique_ptr<NotificationRequestPayloadX360>(new NotificationRequestPayloadX360(_Target->SerialNo));
 
-            for (int idx = 0; idx < NOTIFICATION_OVERLAPPED_QUEUE_SIZE; idx++)
-                lOverlapped[idx].hEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+			for (int idx = 0; idx < NOTIFICATION_OVERLAPPED_QUEUE_SIZE; idx++)
+				lOverlapped[idx].hEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
 
-            int currentOverlappedIdx = 0;
-            int futureOverlappedIdx = NOTIFICATION_OVERLAPPED_QUEUE_SIZE - 1;
+			int currentOverlappedIdx = 0;
+			int futureOverlappedIdx = NOTIFICATION_OVERLAPPED_QUEUE_SIZE - 1;
 
-            // Send out DeviceIOControl calls to wait for incoming feedback notifications. Use N pending requests to make sure that events are not lost even when application would flood FFB events.
-            // The order of DeviceIoControl calls and GetOverlappedResult requests is important to ensure that feedback callback function is called in correct order (ie. FIFO buffer with FFB events).
-            // Note! This loop doesn't call DevIo for the last lOverlapped item on purpose. The DO while loop does it as a first step (futureOverlappedIdx=NOTIFICATION_OVERLAPPED_QUEUE_SIZE-1 in the first loop round).
-            for (int idx = 0; idx < NOTIFICATION_OVERLAPPED_QUEUE_SIZE - 1; idx++)
-            {
-                NotificationRequestPayloadX360* current = payloads[idx].get();
-                DeviceIoControl(_Client->hBusDevice,
-                    current->ioControlCode,
-                    current->lpPayloadBuffer,
-                    current->payloadBufferSize,
-                    current->lpPayloadBuffer,
-                    current->payloadBufferSize,
-                    &transferred[idx],
-                    &lOverlapped[idx]);
-            }
+			// Send out DeviceIOControl calls to wait for incoming feedback notifications. Use N pending requests to make sure that events are not lost even when application would flood FFB events.
+			// The order of DeviceIoControl calls and GetOverlappedResult requests is important to ensure that feedback callback function is called in correct order (ie. FIFO buffer with FFB events).
+			// Note! This loop doesn't call DevIo for the last lOverlapped item on purpose. The DO while loop does it as a first step (futureOverlappedIdx=NOTIFICATION_OVERLAPPED_QUEUE_SIZE-1 in the first loop round).
+			for (int idx = 0; idx < NOTIFICATION_OVERLAPPED_QUEUE_SIZE - 1; idx++)
+			{
+				NotificationRequestPayloadX360* current = payloads[idx].get();
+				DeviceIoControl(_Client->hBusDevice,
+					current->ioControlCode,
+					current->lpPayloadBuffer,
+					current->payloadBufferSize,
+					current->lpPayloadBuffer,
+					current->payloadBufferSize,
+					&transferred[idx],
+					&lOverlapped[idx]);
+			}
 
-		    do
-		    {
-                NotificationRequestPayloadX360* futureNotify = payloads[futureOverlappedIdx].get();
-                DeviceIoControl(
-                    _Client->hBusDevice,
-                    futureNotify->ioControlCode,
-                    futureNotify->lpPayloadBuffer,
-                    futureNotify->payloadBufferSize,
-                    futureNotify->lpPayloadBuffer,
-                    futureNotify->payloadBufferSize,
-                    &transferred[futureOverlappedIdx],
-                    &lOverlapped[futureOverlappedIdx]
-                );
+			do
+			{
+				NotificationRequestPayloadX360* futureNotify = payloads[futureOverlappedIdx].get();
+				DeviceIoControl(
+					_Client->hBusDevice,
+					futureNotify->ioControlCode,
+					futureNotify->lpPayloadBuffer,
+					futureNotify->payloadBufferSize,
+					futureNotify->lpPayloadBuffer,
+					futureNotify->payloadBufferSize,
+					&transferred[futureOverlappedIdx],
+					&lOverlapped[futureOverlappedIdx]
+				);
 
-			    if (GetOverlappedResult(_Client->hBusDevice, &lOverlapped[currentOverlappedIdx], &transferred[currentOverlappedIdx], TRUE) != 0)
-			    {
-				    if (_Target->Notification == nullptr)
-				    {
-                        for (int idx = 0; idx < NOTIFICATION_OVERLAPPED_QUEUE_SIZE; idx++)
-                        {
-                            if (lOverlapped[idx].hEvent)
-                            {
-                                CloseHandle(lOverlapped[idx].hEvent);
-                            }
-                        }
+				if (GetOverlappedResult(_Client->hBusDevice, &lOverlapped[currentOverlappedIdx], &transferred[currentOverlappedIdx], TRUE) != 0)
+				{
+					if (_Target->Notification == nullptr)
+					{
+						for (int idx = 0; idx < NOTIFICATION_OVERLAPPED_QUEUE_SIZE; idx++)
+						{
+							if (lOverlapped[idx].hEvent)
+							{
+								CloseHandle(lOverlapped[idx].hEvent);
+							}
+						}
 
-					    return;
-				    }
+						return;
+					}
 
-                    NotificationRequestPayloadX360* currentPayload = payloads[currentOverlappedIdx].get();
-                    currentPayload->ProcessNotificationRequest(_Client, _Target);
+					NotificationRequestPayloadX360* currentPayload = payloads[currentOverlappedIdx].get();
+					currentPayload->ProcessNotificationRequest(_Client, _Target);
 
-                    if (currentOverlappedIdx >= NOTIFICATION_OVERLAPPED_QUEUE_SIZE - 1)
-                        currentOverlappedIdx = 0;
-                    else
-                        currentOverlappedIdx++;
+					if (currentOverlappedIdx >= NOTIFICATION_OVERLAPPED_QUEUE_SIZE - 1)
+						currentOverlappedIdx = 0;
+					else
+						currentOverlappedIdx++;
 
-                    if (futureOverlappedIdx >= NOTIFICATION_OVERLAPPED_QUEUE_SIZE - 1)
-                        futureOverlappedIdx = 0;
-                    else
-                        futureOverlappedIdx++;
+					if (futureOverlappedIdx >= NOTIFICATION_OVERLAPPED_QUEUE_SIZE - 1)
+						futureOverlappedIdx = 0;
+					else
+						futureOverlappedIdx++;
 
-				    /*reinterpret_cast<PFN_VIGEM_X360_NOTIFICATION>(_Target->Notification)(
-					    _Client, _Target, currentNotify->LargeMotor, currentNotify->SmallMotor, currentNotify->LedNumber, _UserData
-				    );*/
+					/*reinterpret_cast<PFN_VIGEM_X360_NOTIFICATION>(_Target->Notification)(
+						_Client, _Target, currentNotify->LargeMotor, currentNotify->SmallMotor, currentNotify->LedNumber, _UserData
+					);*/
 
 									continue;
 								}
@@ -1158,8 +1158,7 @@ VIGEM_ERROR vigem_target_x360_register_notification(
 										break;
 									}
 								}
-							}
-							while (WaitForSingleObjectEx(_Target->CancelNotificationThreadEvent, 0, FALSE) == WAIT_TIMEOUT);
+							} while (WaitForSingleObjectEx(_Target->CancelNotificationThreadEvent, 0, FALSE) == WAIT_TIMEOUT);
 
 							for (int idx = 0; idx < NOTIFICATION_OVERLAPPED_QUEUE_SIZE; idx++)
 							{
@@ -1170,14 +1169,14 @@ VIGEM_ERROR vigem_target_x360_register_notification(
 							}
 							},
 							target, vigem, userData
-						};
+	};
 
-						_async.detach();
+	_async.detach();
 
-						return VIGEM_ERROR_NONE;
-					}
+	return VIGEM_ERROR_NONE;
+}
 
-					VIGEM_ERROR vigem_target_ds4_register_notification(
+VIGEM_ERROR vigem_target_ds4_register_notification(
 	PVIGEM_CLIENT vigem,
 	PVIGEM_TARGET target,
 	PFN_VIGEM_DS4_NOTIFICATION notification,
@@ -1212,92 +1211,92 @@ VIGEM_ERROR vigem_target_x360_register_notification(
 	else
 		ResetEvent(target->CancelNotificationThreadEvent);
 
-    std::thread _async{
-	    [](
-	    PVIGEM_TARGET _Target,
-	    PVIGEM_CLIENT _Client,
-	    LPVOID _UserData)
-	    {
+	std::thread _async{
+		[](
+		PVIGEM_TARGET _Target,
+		PVIGEM_CLIENT _Client,
+		LPVOID _UserData)
+		{
 			DWORD transferred[NOTIFICATION_OVERLAPPED_QUEUE_SIZE] = { };
 			OVERLAPPED lOverlapped[NOTIFICATION_OVERLAPPED_QUEUE_SIZE] = { };
 			std::unique_ptr<NotificationRequestPayloadDS4> payloads[NOTIFICATION_OVERLAPPED_QUEUE_SIZE] = { };
 
-            memset(transferred, 0, sizeof(transferred));
-            memset(lOverlapped, 0, sizeof(lOverlapped));
+			memset(transferred, 0, sizeof(transferred));
+			memset(lOverlapped, 0, sizeof(lOverlapped));
 
-            for (int idx = 0; idx < NOTIFICATION_OVERLAPPED_QUEUE_SIZE; idx++)
-                payloads[idx] = std::unique_ptr<NotificationRequestPayloadDS4>(new NotificationRequestPayloadDS4(_Target->SerialNo));
+			for (int idx = 0; idx < NOTIFICATION_OVERLAPPED_QUEUE_SIZE; idx++)
+				payloads[idx] = std::unique_ptr<NotificationRequestPayloadDS4>(new NotificationRequestPayloadDS4(_Target->SerialNo));
 
-            for (int idx = 0; idx < NOTIFICATION_OVERLAPPED_QUEUE_SIZE; idx++)
-                lOverlapped[idx].hEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+			for (int idx = 0; idx < NOTIFICATION_OVERLAPPED_QUEUE_SIZE; idx++)
+				lOverlapped[idx].hEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
 
-            int currentOverlappedIdx = 0;
-            int futureOverlappedIdx = NOTIFICATION_OVERLAPPED_QUEUE_SIZE - 1;
+			int currentOverlappedIdx = 0;
+			int futureOverlappedIdx = NOTIFICATION_OVERLAPPED_QUEUE_SIZE - 1;
 
-            // Send out DeviceIOControl calls to wait for incoming feedback notifications. Use N pending requests to make sure that events are not lost even when application would flood FFB events.
-            // The order of DeviceIoControl calls and GetOverlappedResult requests is important to ensure that feedback callback function is called in correct order (ie. FIFO buffer with FFB events).
-            // Note! This loop doesn't call DevIo for the last lOverlapped item on purpose. The DO while loop does it as a first step (futureOverlappedIdx=NOTIFICATION_OVERLAPPED_QUEUE_SIZE-1 in the first loop round).
-            for (int idx = 0; idx < NOTIFICATION_OVERLAPPED_QUEUE_SIZE - 1; idx++)
-            {
-                NotificationRequestPayloadDS4* current = payloads[idx].get();
-                DeviceIoControl(_Client->hBusDevice,
-                    current->ioControlCode,
-                    current->lpPayloadBuffer,
-                    current->payloadBufferSize,
-                    current->lpPayloadBuffer,
-                    current->payloadBufferSize,
-                    &transferred[idx],
-                    &lOverlapped[idx]);
-            }
+			// Send out DeviceIOControl calls to wait for incoming feedback notifications. Use N pending requests to make sure that events are not lost even when application would flood FFB events.
+			// The order of DeviceIoControl calls and GetOverlappedResult requests is important to ensure that feedback callback function is called in correct order (ie. FIFO buffer with FFB events).
+			// Note! This loop doesn't call DevIo for the last lOverlapped item on purpose. The DO while loop does it as a first step (futureOverlappedIdx=NOTIFICATION_OVERLAPPED_QUEUE_SIZE-1 in the first loop round).
+			for (int idx = 0; idx < NOTIFICATION_OVERLAPPED_QUEUE_SIZE - 1; idx++)
+			{
+				NotificationRequestPayloadDS4* current = payloads[idx].get();
+				DeviceIoControl(_Client->hBusDevice,
+					current->ioControlCode,
+					current->lpPayloadBuffer,
+					current->payloadBufferSize,
+					current->lpPayloadBuffer,
+					current->payloadBufferSize,
+					&transferred[idx],
+					&lOverlapped[idx]);
+			}
 
-		    do
-		    {
-                NotificationRequestPayloadDS4* futureNotify = payloads[futureOverlappedIdx].get();
-                DeviceIoControl(
-                    _Client->hBusDevice,
-                    futureNotify->ioControlCode,
-                    futureNotify->lpPayloadBuffer,
-                    futureNotify->payloadBufferSize,
-                    futureNotify->lpPayloadBuffer,
-                    futureNotify->payloadBufferSize,
-                    &transferred[futureOverlappedIdx],
-                    &lOverlapped[futureOverlappedIdx]
-                );
+			do
+			{
+				NotificationRequestPayloadDS4* futureNotify = payloads[futureOverlappedIdx].get();
+				DeviceIoControl(
+					_Client->hBusDevice,
+					futureNotify->ioControlCode,
+					futureNotify->lpPayloadBuffer,
+					futureNotify->payloadBufferSize,
+					futureNotify->lpPayloadBuffer,
+					futureNotify->payloadBufferSize,
+					&transferred[futureOverlappedIdx],
+					&lOverlapped[futureOverlappedIdx]
+				);
 
-			    if (GetOverlappedResult(_Client->hBusDevice, &lOverlapped[currentOverlappedIdx], &transferred[currentOverlappedIdx], TRUE) != 0)
-			    {
-				    if (_Target->Notification == nullptr)
-				    {
-                        for (int idx = 0; idx < NOTIFICATION_OVERLAPPED_QUEUE_SIZE; idx++)
-                        {
-                            if (lOverlapped[idx].hEvent)
-                            {
-                                CloseHandle(lOverlapped[idx].hEvent);
-                            }
-                        }
+				if (GetOverlappedResult(_Client->hBusDevice, &lOverlapped[currentOverlappedIdx], &transferred[currentOverlappedIdx], TRUE) != 0)
+				{
+					if (_Target->Notification == nullptr)
+					{
+						for (int idx = 0; idx < NOTIFICATION_OVERLAPPED_QUEUE_SIZE; idx++)
+						{
+							if (lOverlapped[idx].hEvent)
+							{
+								CloseHandle(lOverlapped[idx].hEvent);
+							}
+						}
 
-					    return;
-				    }
+						return;
+					}
 
-                    NotificationRequestPayloadDS4* currentPayload = payloads[currentOverlappedIdx].get();
-                    currentPayload->ProcessNotificationRequest(_Client, _Target);
+					NotificationRequestPayloadDS4* currentPayload = payloads[currentOverlappedIdx].get();
+					currentPayload->ProcessNotificationRequest(_Client, _Target);
 
-                    if (currentOverlappedIdx >= NOTIFICATION_OVERLAPPED_QUEUE_SIZE - 1)
-                        currentOverlappedIdx = 0;
-                    else
-                        currentOverlappedIdx++;
+					if (currentOverlappedIdx >= NOTIFICATION_OVERLAPPED_QUEUE_SIZE - 1)
+						currentOverlappedIdx = 0;
+					else
+						currentOverlappedIdx++;
 
-                    if (futureOverlappedIdx >= NOTIFICATION_OVERLAPPED_QUEUE_SIZE - 1)
-                        futureOverlappedIdx = 0;
-                    else
-                        futureOverlappedIdx++;
+					if (futureOverlappedIdx >= NOTIFICATION_OVERLAPPED_QUEUE_SIZE - 1)
+						futureOverlappedIdx = 0;
+					else
+						futureOverlappedIdx++;
 
-				    /*reinterpret_cast<PFN_VIGEM_DS4_NOTIFICATION>(_Target->Notification)(
-					    _Client, _Target, ds4rn.Report.LargeMotor,
-					    ds4rn.Report.SmallMotor,
-					    ds4rn.Report.LightbarColor, _UserData
-				    );
-                    */
+					/*reinterpret_cast<PFN_VIGEM_DS4_NOTIFICATION>(_Target->Notification)(
+						_Client, _Target, ds4rn.Report.LargeMotor,
+						ds4rn.Report.SmallMotor,
+						ds4rn.Report.LightbarColor, _UserData
+					);
+					*/
 
 									continue;
 								}
@@ -1310,8 +1309,7 @@ VIGEM_ERROR vigem_target_x360_register_notification(
 										break;
 									}
 								}
-							}
-							while (WaitForSingleObjectEx(_Target->CancelNotificationThreadEvent, 0, FALSE) == WAIT_TIMEOUT);
+							} while (WaitForSingleObjectEx(_Target->CancelNotificationThreadEvent, 0, FALSE) == WAIT_TIMEOUT);
 
 							for (int idx = 0; idx < NOTIFICATION_OVERLAPPED_QUEUE_SIZE; idx++)
 							{
@@ -1322,15 +1320,15 @@ VIGEM_ERROR vigem_target_x360_register_notification(
 							}
 							},
 							target, vigem, userData
-						};
+	};
 
-						_async.detach();
+	_async.detach();
 
-						return VIGEM_ERROR_NONE;
-					}
+	return VIGEM_ERROR_NONE;
+}
 
-					void vigem_target_x360_unregister_notification(PVIGEM_TARGET target)
-					{
+void vigem_target_x360_unregister_notification(PVIGEM_TARGET target)
+{
 	if (target->CancelNotificationThreadEvent != nullptr)
 		SetEvent(target->CancelNotificationThreadEvent);
 
@@ -1644,7 +1642,7 @@ VIGEM_ERROR vigem_target_ds4_await_output_report_timeout(
 	if (status == WAIT_TIMEOUT)
 	{
 		return VIGEM_ERROR_TIMED_OUT;
-}
+	}
 
 #if defined(VIGEM_VERBOSE_LOGGING_ENABLED)
 	DBGPRINT(L"Dumping buffer for %d", target->SerialNo);
