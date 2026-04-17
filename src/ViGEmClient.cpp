@@ -351,6 +351,7 @@ static DWORD WINAPI vigem_internal_ds4_output_report_pickup_handler(LPVOID Param
 		const PCHAR dumpBuffer = (PCHAR)calloc(sizeof(DS4_OUTPUT_BUFFER), 3);
 		to_hex(await.Report.Buffer, sizeof(DS4_OUTPUT_BUFFER), dumpBuffer, sizeof(DS4_OUTPUT_BUFFER) * 3);
 		OutputDebugStringA(dumpBuffer);
+		free(dumpBuffer);
 #endif
 
 		const PVIGEM_TARGET pTarget = pClient->pTargetsList[await.SerialNo];
@@ -392,6 +393,9 @@ void vigem_free(PVIGEM_CLIENT vigem)
 	if (vigem)
 		free(vigem);
 }
+
+#define CONNECT_VERSION_CHECK_TRIES 4
+#define CONNECT_VERSION_CHECK_DELAY_MS 500
 
 VIGEM_ERROR vigem_connect(PVIGEM_CLIENT vigem)
 {
@@ -535,46 +539,70 @@ VIGEM_ERROR vigem_connect(PVIGEM_CLIENT vigem)
 			continue;
 		}
 
-		DWORD transferred = 0;
-		OVERLAPPED lOverlapped = { 0 };
-		lOverlapped.hEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
-
-		VIGEM_CHECK_VERSION version;
-		VIGEM_CHECK_VERSION_INIT(&version, VIGEM_COMMON_VERSION);
-
-		// send compiled library version to driver to check compatibility
-		DeviceIoControl(
-			vigem->hBusDevice,
-			IOCTL_VIGEM_CHECK_VERSION,
-			&version,
-			version.Size,
-			nullptr,
-			0,
-			&transferred,
-			&lOverlapped
-		);
-
-		// wait for result
-		if (GetOverlappedResult(vigem->hBusDevice, &lOverlapped, &transferred, TRUE) != 0)
+		bool versionCheckPassed = false;
+		for (int versionAttempt = 0; versionAttempt < CONNECT_VERSION_CHECK_TRIES && !versionCheckPassed; versionAttempt++)
 		{
-			vigem->hDS4OutputReportPickupThread = CreateThread(
+			DWORD transferred = 0;
+			OVERLAPPED lOverlapped = { 0 };
+			lOverlapped.hEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+
+			VIGEM_CHECK_VERSION version;
+			VIGEM_CHECK_VERSION_INIT(&version, VIGEM_COMMON_VERSION);
+
+			// send compiled library version to driver to check compatibility
+			DeviceIoControl(
+				vigem->hBusDevice,
+				IOCTL_VIGEM_CHECK_VERSION,
+				&version,
+				version.Size,
 				nullptr,
 				0,
-				vigem_internal_ds4_output_report_pickup_handler,
-				vigem,
-				0,
-				nullptr
+				&transferred,
+				&lOverlapped
 			);
 
-			error = VIGEM_ERROR_NONE;
-			free(detailDataBuffer);
+			// wait for result
+			if (GetOverlappedResult(vigem->hBusDevice, &lOverlapped, &transferred, TRUE) != 0)
+			{
+				vigem->hDS4OutputReportPickupThread = CreateThread(
+					nullptr,
+					0,
+					vigem_internal_ds4_output_report_pickup_handler,
+					vigem,
+					0,
+					nullptr
+				);
+
+				error = VIGEM_ERROR_NONE;
+				versionCheckPassed = true;
+				CloseHandle(lOverlapped.hEvent);
+				break;
+			}
+
+			const DWORD versionCheckErr = GetLastError();
 			CloseHandle(lOverlapped.hEvent);
+
+			// On system resume the driver may not be ready yet; retry transient errors
+			if ((versionCheckErr == ERROR_NOT_READY
+				|| versionCheckErr == ERROR_IO_DEVICE
+				|| versionCheckErr == ERROR_BAD_COMMAND)
+				&& versionAttempt < CONNECT_VERSION_CHECK_TRIES - 1)
+			{
+				Sleep(CONNECT_VERSION_CHECK_DELAY_MS);
+				continue;
+			}
+
+			// Non-retryable failure
+			error = VIGEM_ERROR_BUS_VERSION_MISMATCH;
 			break;
 		}
 
-		error = VIGEM_ERROR_BUS_VERSION_MISMATCH;
+		if (!versionCheckPassed)
+		{
+			free(detailDataBuffer);
+			continue;
+		}
 
-		CloseHandle(lOverlapped.hEvent);
 		free(detailDataBuffer);
 	}
 
@@ -718,6 +746,10 @@ VIGEM_ERROR vigem_target_add(PVIGEM_CLIENT vigem, PVIGEM_TARGET target)
 		// 
 		for (target->SerialNo = 1; target->SerialNo <= VIGEM_TARGETS_MAX; target->SerialNo++)
 		{
+			// Reset the plugin overlapped event between slot attempts to avoid stale state
+			if (olPlugIn.hEvent)
+				ResetEvent(olPlugIn.hEvent);
+
 			VIGEM_PLUGIN_TARGET_INIT(&plugin, target->SerialNo, target->Type);
 
 			plugin.VendorId = target->VendorId;
@@ -1108,33 +1140,37 @@ VIGEM_ERROR vigem_target_x360_register_notification(
 					    _Client, _Target, currentNotify->LargeMotor, currentNotify->SmallMotor, currentNotify->LedNumber, _UserData
 				    );*/
 
-					continue;
-				}
+									continue;
+								}
 
-			    if (GetLastError() == ERROR_ACCESS_DENIED || GetLastError() == ERROR_OPERATION_ABORTED)
-			    {
-                    for (int idx = 0; idx < NOTIFICATION_OVERLAPPED_QUEUE_SIZE; idx++)
-                    {
-                        if (lOverlapped[idx].hEvent)
-                        {
-                            CloseHandle(lOverlapped[idx].hEvent);
-                        }
-                    }
+								{
+									const DWORD lastErr = GetLastError();
+									if (lastErr != ERROR_IO_PENDING)
+									{
+										// Exit on any unrecoverable error (access denied, aborted, invalid handle, device gone, etc.)
+										break;
+									}
+								}
+							}
+							while (WaitForSingleObjectEx(_Target->CancelNotificationThreadEvent, 0, FALSE) == WAIT_TIMEOUT);
 
-				    return;
-			    }
-		    }
-		    while (TRUE);
-	    },
-	    target, vigem, userData
-    };
+							for (int idx = 0; idx < NOTIFICATION_OVERLAPPED_QUEUE_SIZE; idx++)
+							{
+								if (lOverlapped[idx].hEvent)
+								{
+									CloseHandle(lOverlapped[idx].hEvent);
+								}
+							}
+							},
+							target, vigem, userData
+						};
 
-	_async.detach();
+						_async.detach();
 
-	return VIGEM_ERROR_NONE;
-}
+						return VIGEM_ERROR_NONE;
+					}
 
-VIGEM_ERROR vigem_target_ds4_register_notification(
+					VIGEM_ERROR vigem_target_ds4_register_notification(
 	PVIGEM_CLIENT vigem,
 	PVIGEM_TARGET target,
 	PFN_VIGEM_DS4_NOTIFICATION notification,
@@ -1257,34 +1293,38 @@ VIGEM_ERROR vigem_target_ds4_register_notification(
 				    );
                     */
 
-					continue;
-				}
+									continue;
+								}
 
-			    if (GetLastError() == ERROR_ACCESS_DENIED || GetLastError() == ERROR_OPERATION_ABORTED)
-			    {
-                    for (int idx = 0; idx < NOTIFICATION_OVERLAPPED_QUEUE_SIZE; idx++)
-                    {
-                        if (lOverlapped[idx].hEvent)
-                        {
-                            CloseHandle(lOverlapped[idx].hEvent);
-                        }
-                    }
+								{
+									const DWORD lastErr = GetLastError();
+									if (lastErr != ERROR_IO_PENDING)
+									{
+										// Exit on any unrecoverable error (access denied, aborted, invalid handle, device gone, etc.)
+										break;
+									}
+								}
+							}
+							while (WaitForSingleObjectEx(_Target->CancelNotificationThreadEvent, 0, FALSE) == WAIT_TIMEOUT);
 
-				    return;
-			    }
-		    }
-		    while (TRUE);
-	    },
-	    target, vigem, userData
-    };
+							for (int idx = 0; idx < NOTIFICATION_OVERLAPPED_QUEUE_SIZE; idx++)
+							{
+								if (lOverlapped[idx].hEvent)
+								{
+									CloseHandle(lOverlapped[idx].hEvent);
+								}
+							}
+							},
+							target, vigem, userData
+						};
 
-	_async.detach();
+						_async.detach();
 
-	return VIGEM_ERROR_NONE;
-}
+						return VIGEM_ERROR_NONE;
+					}
 
-void vigem_target_x360_unregister_notification(PVIGEM_TARGET target)
-{
+					void vigem_target_x360_unregister_notification(PVIGEM_TARGET target)
+					{
 	if (target->CancelNotificationThreadEvent != nullptr)
 		SetEvent(target->CancelNotificationThreadEvent);
 
