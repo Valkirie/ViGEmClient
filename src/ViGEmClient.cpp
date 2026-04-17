@@ -451,6 +451,8 @@ VIGEM_ERROR vigem_connect(PVIGEM_CLIENT vigem)
         if (propRequiredSize > 0)
         {
             PWCHAR tempPropBuffer = new WCHAR[propRequiredSize];
+			if (!tempPropBuffer) continue;
+
             SetupDiGetDeviceProperty(deviceInfoSet,
                 &deviceInfoBuffer,
                 &DEVPKEY_Device_DriverVersion,
@@ -461,6 +463,12 @@ VIGEM_ERROR vigem_connect(PVIGEM_CLIENT vigem)
                 0);
 
             char* szTo = new char[propRequiredSize];
+			if (!szTo)
+			{
+				delete[] tempPropBuffer;
+				continue;
+			}
+
             WideCharToMultiByte(CP_UTF8, 0, tempPropBuffer, -1, szTo, propRequiredSize, nullptr, nullptr);
             std::string versionString(szTo);
             Version tempVersion(versionString);
@@ -1061,13 +1069,12 @@ VIGEM_ERROR vigem_target_x360_register_notification(
         PVIGEM_CLIENT _Client,
         LPVOID _UserData)
         {
-            DWORD transferred[NOTIFICATION_OVERLAPPED_QUEUE_SIZE] = { };
-            OVERLAPPED lOverlapped[NOTIFICATION_OVERLAPPED_QUEUE_SIZE] = { };
-            std::unique_ptr<NotificationRequestPayloadX360> payloads[NOTIFICATION_OVERLAPPED_QUEUE_SIZE] = { };
+			DWORD transferred[NOTIFICATION_OVERLAPPED_QUEUE_SIZE] = { };
+			OVERLAPPED lOverlapped[NOTIFICATION_OVERLAPPED_QUEUE_SIZE] = { };
+			std::unique_ptr<NotificationRequestPayloadX360> payloads[NOTIFICATION_OVERLAPPED_QUEUE_SIZE] = { };
 
-            memset(payloads, 0, sizeof(payloads));
-            memset(transferred, 0, sizeof(transferred));
-            memset(lOverlapped, 0, sizeof(lOverlapped));
+			memset(transferred, 0, sizeof(transferred));
+			memset(lOverlapped, 0, sizeof(lOverlapped));
 
             for (int idx = 0; idx < NOTIFICATION_OVERLAPPED_QUEUE_SIZE; idx++)
                 payloads[idx] = std::unique_ptr<NotificationRequestPayloadX360>(new NotificationRequestPayloadX360(_Target->SerialNo));
@@ -1211,11 +1218,10 @@ VIGEM_ERROR vigem_target_x360_register_notification(
 	    PVIGEM_CLIENT _Client,
 	    LPVOID _UserData)
 	    {
-            DWORD transferred[NOTIFICATION_OVERLAPPED_QUEUE_SIZE] = { };
-            OVERLAPPED lOverlapped[NOTIFICATION_OVERLAPPED_QUEUE_SIZE] = { };
-            std::unique_ptr<NotificationRequestPayloadDS4> payloads[NOTIFICATION_OVERLAPPED_QUEUE_SIZE] = { };
+			DWORD transferred[NOTIFICATION_OVERLAPPED_QUEUE_SIZE] = { };
+			OVERLAPPED lOverlapped[NOTIFICATION_OVERLAPPED_QUEUE_SIZE] = { };
+			std::unique_ptr<NotificationRequestPayloadDS4> payloads[NOTIFICATION_OVERLAPPED_QUEUE_SIZE] = { };
 
-            memset(payloads, 0, sizeof(payloads));
             memset(transferred, 0, sizeof(transferred));
             memset(lOverlapped, 0, sizeof(lOverlapped));
 
