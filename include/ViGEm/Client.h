@@ -103,6 +103,14 @@ extern "C" {
 		// The specified timeout has been reached.
 		// 
 		VIGEM_ERROR_TIMED_OUT = 0xE0000018,
+		//
+		// The device is not ready to accept commands. This can happen when the
+		// system has just resumed from sleep or hibernation and the USB/HID stack
+		// has not finished re-enumerating devices. The caller should wait a short
+		// time and retry the operation (e.g. after receiving WM_POWERBROADCAST /
+		// PBT_APMRESUMEAUTOMATIC).
+		// 
+		VIGEM_ERROR_DEVICE_NOT_READY = 0xE0000019,
 	};
 
 	/**

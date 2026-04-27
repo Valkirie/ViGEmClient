@@ -108,7 +108,7 @@ static void to_hex(unsigned char* in, size_t insz, char* out, size_t outsz)
 		pout[0] = hex[(*pin >> 4) & 0xF];
 		pout[1] = hex[*pin & 0xF];
 		pout[2] = ':';
-		if (pout + 3 - out > outsz)
+		if (static_cast<size_t>(pout + 3 - out) > outsz)
 		{
 			/* Better to truncate output string than overflow buffer */
 			/* it would be still better to either return a status */
@@ -664,7 +664,7 @@ BOOLEAN vigem_target_is_waitable_add_supported(PVIGEM_TARGET target)
 		return FALSE;
 
 	// TODO: Replace all this with a more robust version check system
-	return !target->IsWaitReadyUnsupported;
+	return static_cast<BOOLEAN>(!target->IsWaitReadyUnsupported);
 }
 
 PVIGEM_TARGET vigem_target_x360_alloc(void)
@@ -793,6 +793,7 @@ VIGEM_ERROR vigem_target_add(PVIGEM_CLIENT vigem, PVIGEM_TARGET target)
 			if (GetOverlappedResult(vigem->hBusDevice, &olPlugIn, &transferred, TRUE) != 0)
 			{
 				bool waitSuccess = false;
+				bool hardwareErrorExhausted = false;
 				for (int i = 0; i < WAIT_DEVICE_READY_TRIES && !waitSuccess; i++)
 				{
 					/*
@@ -860,6 +861,16 @@ VIGEM_ERROR vigem_target_add(PVIGEM_CLIENT vigem, PVIGEM_TARGET target)
 							olWait.hEvent = waitEvent;
 						}
 					}
+					else
+					{
+						// All inner wait attempts were consumed exclusively with
+						// ERROR_DEVICE_HARDWARE_ERROR. This is the signature of the USB/HID
+						// stack still reinitializing after a system resume from sleep or
+						// hibernation. Surface a dedicated error so the caller can implement
+						// its own retry policy (e.g. after receiving WM_POWERBROADCAST /
+						// PBT_APMRESUMEAUTOMATIC) rather than sleeping inside the library.
+						hardwareErrorExhausted = true;
+					}
 				}
 
 				if (waitSuccess)
@@ -870,7 +881,17 @@ VIGEM_ERROR vigem_target_add(PVIGEM_CLIENT vigem, PVIGEM_TARGET target)
 				//
 				// Don't leave device connected if the wait call failed
 				//
-				error = vigem_target_remove(vigem, target);
+				vigem_target_remove(vigem, target);
+
+				//
+				// Surface a dedicated error when the USB/HID stack was still reinitializing
+				// (all wait attempts failed with ERROR_DEVICE_HARDWARE_ERROR). The caller
+				// can detect VIGEM_ERROR_DEVICE_NOT_READY and schedule its own retry,
+				// for example after receiving WM_POWERBROADCAST / PBT_APMRESUMEAUTOMATIC.
+				//
+				error = hardwareErrorExhausted
+					? VIGEM_ERROR_DEVICE_NOT_READY
+					: VIGEM_ERROR_NO_FREE_SLOT;
 				break;
 			}
 		}
@@ -1228,7 +1249,7 @@ VIGEM_ERROR vigem_target_ds4_register_notification(
 				payloads[idx] = std::unique_ptr<NotificationRequestPayloadDS4>(new NotificationRequestPayloadDS4(_Target->SerialNo));
 
 			for (int idx = 0; idx < NOTIFICATION_OVERLAPPED_QUEUE_SIZE; idx++)
-				lOverlapped[idx].hEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+			 lOverlapped[idx].hEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
 
 			int currentOverlappedIdx = 0;
 			int futureOverlappedIdx = NOTIFICATION_OVERLAPPED_QUEUE_SIZE - 1;
